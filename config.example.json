@@ -1,0 +1,47 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8088
+  },
+  "routing": {
+    "mode": "session",
+    "fallback": true,
+    "healthCheckIntervalMs": 30000,
+    "requestTimeoutMs": 120000
+  },
+  "defaultProvider": "local-openai",
+  "context": {
+    "mode": "preserve",
+    "maxInputChars": 180000,
+    "pinSystem": true,
+    "pinRecentTurns": 12
+  },
+  "modelAliases": {
+    "claude-opus-4-1": ["claude-opus-4-1", "gpt-5.5", "glm-5.1"],
+    "claude-sonnet-4": ["claude-sonnet-4", "gpt-5.5", "glm-5.1"]
+  },
+  "providers": [
+    {
+      "id": "local-openai",
+      "name": "Local OpenAI Compatible",
+      "type": "openai",
+      "baseUrl": "http://127.0.0.1:3000",
+      "path": "/v1/chat/completions",
+      "apiKey": "sk-local",
+      "models": ["gpt-5.5"],
+      "enabled": false,
+      "priority": 10
+    },
+    {
+      "id": "local-anthropic",
+      "name": "Local Anthropic Compatible",
+      "type": "anthropic",
+      "baseUrl": "http://127.0.0.1:3001",
+      "path": "/v1/messages",
+      "apiKey": "sk-local",
+      "models": ["claude-opus-4-1"],
+      "enabled": false,
+      "priority": 20
+    }
+  ]
+}
