@@ -3,3 +3,4 @@ dist
 .env
 config.local.json
 metrics.json
+usage-log.jsonl

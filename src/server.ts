@@ -6,6 +6,7 @@ import { loadConfig, saveConfig } from "./config.js";
 import { toInternalRequest } from "./context.js";
 import { MetricsStore } from "./metrics.js";
 import { ProviderRouter } from "./router.js";
+import { UsageStore } from "./usage.js";
 import type { ClaudeMessagesRequest, ProviderConfig } from "./types.js";
 
 const claudeRequestSchema = z.object({
@@ -38,6 +39,7 @@ const addProviderSchema = z.object({
 
 const config = loadConfig();
 const metrics = new MetricsStore();
+const usage = new UsageStore();
 const router = new ProviderRouter(config, metrics);
 const app = Fastify({ logger: true });
 const providerHealth = new Map<string, ProviderHealth>();
@@ -89,6 +91,23 @@ app.get("/", async (_request, reply) => {
       <div class="test-result ${status === "err" ? "err" : status === "ok" ? "ok" : ""}" id="result-${escapeHtml(provider.id)}">${health?.error ? escapeHtml(shortError(health.error)) : status === "ok" ? "✓ 自动检测通过" : ""}</div>
     </article>`;
   }).join("");
+  const usageSummary = usage.summary();
+  const providerUsageRows = usageSummary.byProvider.slice(0, 8).map((bucket) => `
+        <tr>
+          <td>${escapeHtml(bucket.id)}</td>
+          <td>${bucket.calls}</td>
+          <td>${bucket.successes}</td>
+          <td>${bucket.failures}</td>
+          <td>${bucket.avgLatencyMs}ms</td>
+        </tr>`).join("");
+  const modelUsageRows = usageSummary.byModel.slice(0, 8).map((bucket) => `
+        <tr>
+          <td>${escapeHtml(bucket.id)}</td>
+          <td>${bucket.calls}</td>
+          <td>${bucket.successes}</td>
+          <td>${bucket.failures}</td>
+          <td>${bucket.avgLatencyMs}ms</td>
+        </tr>`).join("");
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -279,6 +298,23 @@ app.get("/", async (_request, reply) => {
       color: #96a5c2;
       font-size: 13px;
     }
+    .usage-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .usage-panel {
+      background: #1a2030;
+      border: 1px solid #2a3144;
+      border-radius: 8px;
+      padding: 16px;
+      overflow: hidden;
+    }
+    .usage-panel h2 { font-size: 14px; margin: 0 0 12px; color: #dbe5fb; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 8px 6px; border-bottom: 1px solid #252d3e; text-align: left; color: #94a3bd; }
+    td:first-child { color: #e9eefc; font-family: "JetBrains Mono", Consolas, monospace; }
+    th { color: #71809c; font-weight: 800; }
     .import-box {
       background: #1a2030;
       border: 1px solid #2a3144;
@@ -361,6 +397,31 @@ app.get("/", async (_request, reply) => {
         <div class="setting"><span>Fallback</span><strong>${config.routing.fallback ? "true" : "false"}</strong></div>
         <div class="setting"><span>Provider 数量</span><strong>${config.providers.length}</strong></div>
         <div class="setting"><span>自动检测间隔</span><strong>${Math.round(config.routing.healthCheckIntervalMs / 1000)}s</strong></div>
+      </div>
+    </section>
+
+    <section>
+      <h1 class="section-title">调用统计</h1>
+      <div class="settings">
+        <div class="setting"><span>总调用</span><strong>${usageSummary.totalCalls}</strong></div>
+        <div class="setting"><span>成功</span><strong>${usageSummary.successCalls}</strong></div>
+        <div class="setting"><span>失败</span><strong>${usageSummary.failureCalls}</strong></div>
+      </div>
+      <div class="usage-grid" style="margin-top:12px;">
+        <div class="usage-panel">
+          <h2>Provider 调用</h2>
+          <table>
+            <thead><tr><th>Provider</th><th>调用</th><th>成功</th><th>失败</th><th>均值</th></tr></thead>
+            <tbody>${providerUsageRows || `<tr><td colspan="5">暂无调用</td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="usage-panel">
+          <h2>模型调用</h2>
+          <table>
+            <thead><tr><th>模型</th><th>调用</th><th>成功</th><th>失败</th><th>均值</th></tr></thead>
+            <tbody>${modelUsageRows || `<tr><td colspan="5">暂无调用</td></tr>`}</tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -993,6 +1054,8 @@ app.get("/providers", async () => ({
 
 app.get("/health-checks", async () => healthSnapshot());
 
+app.get("/usage", async () => usage.summary());
+
 app.get("/route-preview/:model", async (request) => {
   const { model } = request.params as { model: string };
   const decision = router.preview(model);
@@ -1041,6 +1104,7 @@ app.post("/v1/messages", async (request, reply) => {
   const decision = router.choose(internal);
   const candidates = config.routing.fallback ? decision.candidates : [decision.candidates[0]];
   const errors: string[] = [];
+  const requestStartedAt = Date.now();
 
   for (const candidate of candidates) {
     try {
@@ -1056,6 +1120,15 @@ app.post("/v1/messages", async (request, reply) => {
         );
         reply.header("x-proxy-upstream-latency-ms", String(result.latencyMs));
         metrics.recordSuccess(candidate.provider.id, candidate.model, result.latencyMs);
+        recordUsage({
+          requestedModel: parsed.model,
+          providerId: candidate.provider.id,
+          providerName: candidate.provider.name,
+          actualModel: candidate.model,
+          stream: true,
+          success: true,
+          latencyMs: result.latencyMs
+        });
         return reply;
       }
 
@@ -1067,10 +1140,33 @@ app.post("/v1/messages", async (request, reply) => {
       );
       reply.header("x-proxy-upstream-latency-ms", String(result.latencyMs));
       metrics.recordSuccess(candidate.provider.id, candidate.model, result.latencyMs);
+      const tokenUsage = extractClaudeUsage(result.response);
+      recordUsage({
+        requestedModel: parsed.model,
+        providerId: candidate.provider.id,
+        providerName: candidate.provider.name,
+        actualModel: candidate.model,
+        stream: false,
+        success: true,
+        latencyMs: result.latencyMs,
+        inputTokens: tokenUsage.inputTokens,
+        outputTokens: tokenUsage.outputTokens
+      });
       return result.response;
     } catch (error) {
       metrics.recordFailure(candidate.provider.id, candidate.model);
-      errors.push(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(message);
+      recordUsage({
+        requestedModel: parsed.model,
+        providerId: candidate.provider.id,
+        providerName: candidate.provider.name,
+        actualModel: candidate.model,
+        stream: internal.stream,
+        success: false,
+        latencyMs: Date.now() - requestStartedAt,
+        error: shortError(message)
+      });
       if (internal.stream && reply.raw.headersSent) {
         request.log.error({ errors }, "stream failed after headers were sent");
         reply.raw.end();
@@ -1210,6 +1306,42 @@ function formatTime(timestamp: number): string {
 
 function shortError(error: string): string {
   return error.length > 180 ? `${error.slice(0, 180)}...` : error;
+}
+
+function recordUsage(input: {
+  requestedModel: string;
+  providerId: string;
+  providerName: string;
+  actualModel: string;
+  stream: boolean;
+  success: boolean;
+  latencyMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  error?: string;
+}): void {
+  usage.record({
+    id: `use_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: new Date().toISOString(),
+    ...input
+  });
+}
+
+function extractClaudeUsage(response: unknown): { inputTokens?: number; outputTokens?: number } {
+  if (!response || typeof response !== "object" || !("usage" in response)) {
+    return {};
+  }
+
+  const usageValue = (response as { usage?: unknown }).usage;
+  if (!usageValue || typeof usageValue !== "object") {
+    return {};
+  }
+
+  const usageObject = usageValue as { input_tokens?: unknown; output_tokens?: unknown };
+  return {
+    inputTokens: typeof usageObject.input_tokens === "number" ? usageObject.input_tokens : undefined,
+    outputTokens: typeof usageObject.output_tokens === "number" ? usageObject.output_tokens : undefined
+  };
 }
 
 async function resolveProviderModels(baseUrl: string, path: string, apiKey: string, modelInput?: string): Promise<string[]> {

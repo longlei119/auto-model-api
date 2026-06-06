@@ -49,6 +49,8 @@ http://127.0.0.1:8088/
 - 支持右上角 `+ 添加` 手动新增单个 Provider
 - 支持独立的 `批量导入` 功能，粘贴文本后自动识别 URL 和 `sk-...` key
 - 支持设置或取消默认 Provider
+- 支持调用审计，记录模型实际调用情况
+- 调用日志持久化保存到本地 `usage-log.jsonl`
 - Provider 信息持久化保存到本地 `config.local.json`
 - `config.local.json` 被 `.gitignore` 忽略，避免 API key 上传到 GitHub
 - 支持基础上下文裁剪策略
@@ -69,6 +71,7 @@ http://127.0.0.1:8088/
 - 手动添加 Provider 弹窗
 - 批量导入文本识别弹窗
 - 通用配置展示
+- 调用统计面板
 
 ## API 接口
 
@@ -83,7 +86,31 @@ POST /providers/add            手动新增 Provider
 POST /providers/import-text    从文本识别并批量导入 Provider
 POST /providers/test-all       一键测试所有 Provider
 POST /providers/:id/test       测试单个 Provider
+GET  /usage                    查看模型和 Provider 调用统计
 ```
+
+## 调用统计
+
+每次请求 `POST /v1/messages` 时，会记录一条本地调用日志：
+
+```text
+请求模型
+实际 Provider
+实际模型
+是否流式
+成功 / 失败
+上游耗时
+token 用量（非流式且上游返回 usage 时）
+错误摘要
+```
+
+日志文件：
+
+```text
+usage-log.jsonl
+```
+
+该文件只保存在本机，并已加入 `.gitignore`。默认不记录 prompt 正文，避免把对话内容写入日志。
 
 ## 客户端配置
 

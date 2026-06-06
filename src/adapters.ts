@@ -184,39 +184,156 @@ function toAnthropic(req: InternalRequest, model: string, stream: boolean): unkn
 }
 
 function toOpenAI(req: InternalRequest, model: string, stream: boolean): unknown {
-  return {
+  const payload: Record<string, unknown> = {
     model,
-    messages: req.messages.map((message) => ({
-      role: openAIRole(message),
-      content: contentToOpenAI(message.content)
-    })),
+    messages: messagesToOpenAI(req.messages),
     max_tokens: req.maxTokens,
     temperature: req.temperature,
     top_p: req.topP,
     stop: req.stop,
     stream
   };
+
+  if (req.raw.tools && req.raw.tools.length > 0) {
+    payload.tools = req.raw.tools.map(claudeToolToOpenAI);
+  }
+
+  if (req.raw.tool_choice !== undefined) {
+    payload.tool_choice = claudeToolChoiceToOpenAI(req.raw.tool_choice);
+  }
+
+  if (stream && payload.tools) {
+    payload.stream_options = { include_usage: true };
+  }
+
+  return payload;
 }
 
-function openAIRole(message: InternalMessage): string {
-  if (message.role === "tool") return "tool";
-  return message.role;
+function claudeToolToOpenAI(tool: unknown): unknown {
+  const t = tool as { name?: string; description?: string; input_schema?: unknown };
+  return {
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema
+    }
+  };
 }
 
-function contentToOpenAI(content: unknown): unknown {
+function claudeToolChoiceToOpenAI(choice: unknown): unknown {
+  if (!choice || typeof choice !== "object") return choice;
+  const c = choice as { type?: string; name?: string };
+  if (c.type === "auto") return "auto";
+  if (c.type === "any") return "required";
+  if (c.type === "tool" && c.name) {
+    return { type: "function", function: { name: c.name } };
+  }
+  if (c.type === "none") return "none";
+  return "auto";
+}
+
+function messagesToOpenAI(messages: InternalMessage[]): unknown[] {
+  const result: unknown[] = [];
+
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      result.push(assistantMessageToOpenAI(message));
+    } else if (message.role === "user") {
+      const expanded = userMessageToOpenAI(message);
+      for (const msg of expanded) {
+        result.push(msg);
+      }
+    } else {
+      result.push({
+        role: message.role,
+        content: contentToOpenAIText(message.content)
+      });
+    }
+  }
+
+  return result;
+}
+
+function assistantMessageToOpenAI(message: InternalMessage): unknown {
+  const content = message.content;
+  if (typeof content === "string") return { role: "assistant", content };
+  if (!Array.isArray(content)) return { role: "assistant", content: contentToText(content) };
+
+  const textParts: string[] = [];
+  const toolCalls: unknown[] = [];
+
+  for (const block of content) {
+    if (block && typeof block === "object" && "type" in block) {
+      if (block.type === "text" && "text" in block) {
+        textParts.push(String(block.text));
+      } else if (block.type === "tool_use" && "id" in block && "name" in block && "input" in block) {
+        toolCalls.push({
+          id: block.id,
+          type: "function",
+          function: {
+            name: block.name,
+            arguments: typeof block.input === "string" ? block.input : JSON.stringify(block.input)
+          }
+        });
+      }
+    }
+  }
+
+  const msg: Record<string, unknown> = { role: "assistant" };
+  msg.content = textParts.length > 0 ? textParts.join("") : null;
+  if (toolCalls.length > 0) {
+    msg.tool_calls = toolCalls;
+  }
+  return msg;
+}
+
+function userMessageToOpenAI(message: InternalMessage): unknown[] {
+  const content = message.content;
+  if (typeof content === "string") return [{ role: "user", content }];
+  if (!Array.isArray(content)) return [{ role: "user", content: contentToText(content) }];
+
+  const results: unknown[] = [];
+  const userParts: unknown[] = [];
+
+  for (const block of content) {
+    if (block && typeof block === "object" && "type" in block) {
+      if (block.type === "tool_result" && "tool_use_id" in block) {
+        if (userParts.length > 0) {
+          results.push({ role: "user", content: userParts.splice(0) });
+        }
+        const toolContent = "content" in block ? block.content : "";
+        let text: string;
+        if (typeof toolContent === "string") {
+          text = toolContent;
+        } else if (Array.isArray(toolContent)) {
+          text = toolContent
+            .map((c: any) => (c && c.type === "text" ? c.text : JSON.stringify(c)))
+            .join("\n");
+        } else {
+          text = JSON.stringify(toolContent);
+        }
+        results.push({ role: "tool", tool_call_id: block.tool_use_id, content: text });
+      } else if (block.type === "text" && "text" in block) {
+        userParts.push({ type: "text", text: String(block.text) });
+      } else if (block.type === "image") {
+        userParts.push({ type: "text", text: "[image omitted by compatibility adapter]" });
+      } else {
+        userParts.push({ type: "text", text: contentToText(block) });
+      }
+    }
+  }
+
+  if (userParts.length > 0) {
+    results.push({ role: "user", content: userParts });
+  }
+
+  return results.length > 0 ? results : [{ role: "user", content: "" }];
+}
+
+function contentToOpenAIText(content: unknown): string {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return contentToText(content);
-
-  return content
-    .map((block) => {
-      if (block && typeof block === "object" && "type" in block && block.type === "text") {
-        return { type: "text", text: String("text" in block ? block.text : "") };
-      }
-      if (block && typeof block === "object" && "type" in block && block.type === "image") {
-        return { type: "text", text: "[image omitted by compatibility adapter]" };
-      }
-      return { type: "text", text: contentToText(block) };
-    });
+  return contentToText(content);
 }
 
 function contentToText(content: unknown): string {
@@ -235,14 +352,50 @@ function contentToText(content: unknown): string {
 }
 
 function openAIToClaude(resp: any, model: string): unknown {
-  const text = resp.choices?.[0]?.message?.content ?? "";
+  const message = resp.choices?.[0]?.message;
+  const text = message?.content ?? "";
+  const toolCalls = message?.tool_calls as Array<{
+    id: string;
+    function: { name: string; arguments: string };
+  }> | undefined;
+
+  const content: unknown[] = [];
+  if (text) {
+    content.push({ type: "text", text });
+  }
+  if (toolCalls && toolCalls.length > 0) {
+    for (const tc of toolCalls) {
+      let input: unknown;
+      try {
+        input = JSON.parse(tc.function.arguments);
+      } catch {
+        input = tc.function.arguments;
+      }
+      content.push({
+        type: "tool_use",
+        id: tc.id,
+        name: tc.function.name,
+        input
+      });
+    }
+  }
+  if (content.length === 0) {
+    content.push({ type: "text", text: "" });
+  }
+
+  const finishReason = resp.choices?.[0]?.finish_reason;
+  let stopReason: string;
+  if (finishReason === "length") stopReason = "max_tokens";
+  else if (finishReason === "tool_calls" || (toolCalls && toolCalls.length > 0)) stopReason = "tool_use";
+  else stopReason = "end_turn";
+
   return {
     id: resp.id ?? `msg_${Date.now()}`,
     type: "message",
     role: "assistant",
     model: resp.model ?? model,
-    content: [{ type: "text", text }],
-    stop_reason: resp.choices?.[0]?.finish_reason === "length" ? "max_tokens" : "end_turn",
+    content,
+    stop_reason: stopReason,
     stop_sequence: null,
     usage: {
       input_tokens: resp.usage?.prompt_tokens ?? 0,
@@ -286,6 +439,11 @@ async function pipeOpenAIStreamAsClaude(response: Response, reply: FastifyReply,
   const decoder = new TextDecoder();
   let buffer = "";
 
+  let blockIndex = 0;
+  let textBlockOpen = false;
+  let hasToolCalls = false;
+  const toolCallState: Map<number, { id: string; name: string; started: boolean }> = new Map();
+
   reply.raw.writeHead(200, sseHeaders());
   writeSse(reply, "message_start", {
     type: "message_start",
@@ -300,11 +458,6 @@ async function pipeOpenAIStreamAsClaude(response: Response, reply: FastifyReply,
       usage: { input_tokens: 0, output_tokens: 0 }
     }
   });
-  writeSse(reply, "content_block_start", {
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "text", text: "" }
-  });
 
   for await (const chunk of response.body as any as AsyncIterable<Uint8Array>) {
     buffer += decoder.decode(chunk, { stream: true });
@@ -316,23 +469,115 @@ async function pipeOpenAIStreamAsClaude(response: Response, reply: FastifyReply,
       const data = line.slice(5).trim();
       if (!data || data === "[DONE]") continue;
 
-      const parsed = JSON.parse(data);
-      const delta = parsed.choices?.[0]?.delta?.content;
-      if (delta) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        continue;
+      }
+
+      const choice = parsed.choices?.[0];
+      if (!choice) continue;
+
+      const delta = choice.delta;
+      if (!delta) continue;
+
+      if (delta.content) {
+        if (!textBlockOpen) {
+          writeSse(reply, "content_block_start", {
+            type: "content_block_start",
+            index: blockIndex,
+            content_block: { type: "text", text: "" }
+          });
+          textBlockOpen = true;
+        }
         started = true;
         writeSse(reply, "content_block_delta", {
           type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: delta }
+          index: blockIndex,
+          delta: { type: "text_delta", text: delta.content }
         });
+      }
+
+      if (delta.tool_calls) {
+        hasToolCalls = true;
+        started = true;
+
+        if (textBlockOpen) {
+          writeSse(reply, "content_block_stop", { type: "content_block_stop", index: blockIndex });
+          textBlockOpen = false;
+          blockIndex++;
+        }
+
+        for (const tc of delta.tool_calls) {
+          const tcIndex = tc.index ?? 0;
+          let state = toolCallState.get(tcIndex);
+
+          if (tc.id && !state) {
+            state = { id: tc.id, name: tc.function?.name ?? "", started: false };
+            toolCallState.set(tcIndex, state);
+          }
+
+          if (state && tc.function?.name && !state.name) {
+            state.name = tc.function.name;
+          }
+
+          if (state && !state.started && state.id && state.name) {
+            writeSse(reply, "content_block_start", {
+              type: "content_block_start",
+              index: blockIndex + tcIndex,
+              content_block: { type: "tool_use", id: state.id, name: state.name }
+            });
+            state.started = true;
+          }
+
+          if (tc.function?.arguments && state?.started) {
+            writeSse(reply, "content_block_delta", {
+              type: "content_block_delta",
+              index: blockIndex + tcIndex,
+              delta: { type: "input_json_delta", partial_json: tc.function.arguments }
+            });
+          }
+        }
+      }
+
+      if (choice.finish_reason) {
+        if (textBlockOpen) {
+          writeSse(reply, "content_block_stop", { type: "content_block_stop", index: blockIndex });
+          textBlockOpen = false;
+          blockIndex++;
+        }
+        for (const [tcIndex, state] of toolCallState) {
+          if (state.started) {
+            writeSse(reply, "content_block_stop", { type: "content_block_stop", index: blockIndex + tcIndex });
+          }
+        }
       }
     }
   }
 
-  writeSse(reply, "content_block_stop", { type: "content_block_stop", index: 0 });
+  if (textBlockOpen) {
+    writeSse(reply, "content_block_stop", { type: "content_block_stop", index: blockIndex });
+  }
+  for (const [tcIndex, state] of toolCallState) {
+    if (state.started) {
+      writeSse(reply, "content_block_stop", { type: "content_block_stop", index: blockIndex + tcIndex });
+    }
+  }
+
+  if (!started) {
+    writeSse(reply, "content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" }
+    });
+    writeSse(reply, "content_block_stop", { type: "content_block_stop", index: 0 });
+  }
+
+  const stopReason = hasToolCalls ? "tool_use" : "end_turn";
   writeSse(reply, "message_delta", {
     type: "message_delta",
-    delta: { stop_reason: "end_turn", stop_sequence: null },
+    delta: { stop_reason: stopReason, stop_sequence: null },
     usage: { output_tokens: 0 }
   });
   writeSse(reply, "message_stop", { type: "message_stop" });
