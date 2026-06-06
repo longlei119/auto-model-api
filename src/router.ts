@@ -62,6 +62,15 @@ export class ProviderRouter {
       }
     }
 
+    if (candidates.length === 0) {
+      for (const provider of enabled) {
+        const fallbackModel = provider.models[0];
+        if (fallbackModel) {
+          candidates.push({ provider, model: fallbackModel });
+        }
+      }
+    }
+
     return candidates.sort((a, b) => a.provider.priority - b.provider.priority);
   }
 

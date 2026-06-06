@@ -1,7 +1,7 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { z } from "zod";
-import { callProvider, streamProvider, testProviderChat } from "./adapters.js";
+import { callProvider, streamProvider, testProviderChat, testProviderModels } from "./adapters.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { toInternalRequest } from "./context.js";
 import { MetricsStore } from "./metrics.js";
@@ -24,7 +24,7 @@ const claudeRequestSchema = z.object({
 
 const importProvidersSchema = z.object({
   text: z.string().min(1),
-  model: z.string().min(1).default("gpt-5.5"),
+  model: z.string().optional().default(""),
   path: z.string().min(1).default("/v1/chat/completions")
 });
 
@@ -32,7 +32,7 @@ const addProviderSchema = z.object({
   name: z.string().optional(),
   baseUrl: z.string().url(),
   apiKey: z.string().min(8),
-  model: z.string().min(1).default("gpt-5.5"),
+  model: z.string().optional().default(""),
   path: z.string().min(1).default("/v1/chat/completions")
 });
 
@@ -83,7 +83,7 @@ app.get("/", async (_request, reply) => {
       <div class="card-actions">
         <button data-test="${escapeHtml(provider.id)}">测试</button>
         <button data-default="${escapeHtml(provider.id)}"${provider.id === config.defaultProvider ? " class=\"active\"" : ""}>设为默认</button>
-        <button>编辑</button>
+        <button data-edit="${escapeHtml(provider.id)}">编辑</button>
         <button class="danger">删除</button>
       </div>
       <div class="test-result ${status === "err" ? "err" : status === "ok" ? "ok" : ""}" id="result-${escapeHtml(provider.id)}">${health?.error ? escapeHtml(shortError(health.error)) : status === "ok" ? "✓ 自动检测通过" : ""}</div>
@@ -379,6 +379,7 @@ app.get("/", async (_request, reply) => {
         <button id="close-add">关闭</button>
       </div>
       <div class="form-grid">
+        <input id="add-id" type="hidden" />
         <div class="field">
           <label>名称</label>
           <input id="add-name" class="text-input" placeholder="例如 my-provider" />
@@ -392,8 +393,8 @@ app.get("/", async (_request, reply) => {
           <input id="add-api-key" class="text-input" placeholder="sk-..." />
         </div>
         <div class="field">
-          <label>Model</label>
-          <input id="add-model" class="text-input" value="gpt-5.5" />
+          <label>Model（可留空自动识别）</label>
+          <input id="add-model" class="text-input" placeholder="留空自动读取 /v1/models" />
         </div>
         <div class="field">
           <label>Path</label>
@@ -423,7 +424,7 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
 
 解析只在本机进行，识别后会写入 config.local.json。"></textarea>
         <div class="import-actions">
-          <input id="modal-import-model" class="text-input" value="gpt-5.5" />
+          <input id="modal-import-model" class="text-input" placeholder="模型可留空自动识别" />
           <button id="modal-import-providers" class="primary">识别并添加</button>
           <span id="modal-import-result" class="status"></span>
         </div>
@@ -434,6 +435,7 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
     const addModal = document.getElementById("add-modal");
     const importModal = document.getElementById("import-modal");
     document.getElementById("open-add").addEventListener("click", () => {
+      resetAddForm();
       addModal.classList.add("open");
       document.getElementById("add-base-url").focus();
     });
@@ -462,20 +464,21 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
       result.textContent = "";
 
       try {
-        const response = await fetch("/providers/add", {
-          method: "POST",
+        const providerId = document.getElementById("add-id").value;
+        const response = await fetch(providerId ? "/providers/" + encodeURIComponent(providerId) : "/providers/add", {
+          method: providerId ? "PUT" : "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             name: document.getElementById("add-name").value,
             baseUrl: document.getElementById("add-base-url").value,
             apiKey: document.getElementById("add-api-key").value,
-            model: document.getElementById("add-model").value || "gpt-5.5",
+            model: document.getElementById("add-model").value,
             path: document.getElementById("add-path").value || "/v1/chat/completions"
           })
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error?.message || "保存失败");
-        result.textContent = "已添加 " + data.provider.id + "，正在刷新...";
+        result.textContent = "已保存 " + data.provider.id + "，正在刷新...";
         setTimeout(() => location.reload(), 700);
       } catch (error) {
         result.textContent = "保存失败: " + error.message;
@@ -483,6 +486,55 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
         button.disabled = false;
         button.textContent = "保存";
       }
+    });
+
+    document.querySelectorAll("[data-edit]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const id = button.getAttribute("data-edit");
+        const result = document.getElementById("add-result");
+        result.textContent = "加载中...";
+        try {
+          const response = await fetch("/providers/" + encodeURIComponent(id));
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error?.message || "加载失败");
+          document.getElementById("add-id").value = data.provider.id;
+          document.getElementById("add-name").value = data.provider.name;
+          document.getElementById("add-base-url").value = data.provider.baseUrl;
+          document.getElementById("add-api-key").value = data.provider.apiKey;
+          document.getElementById("add-model").value = data.provider.models.join(",");
+          document.getElementById("add-path").value = data.provider.path;
+          document.querySelector("#add-modal .modal-head h2").textContent = "编辑 Provider";
+          document.getElementById("save-add").textContent = "保存";
+          result.textContent = "";
+          addModal.classList.add("open");
+          document.getElementById("add-name").focus();
+        } catch (error) {
+          result.textContent = "加载失败: " + error.message;
+          addModal.classList.add("open");
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-default]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const id = button.getAttribute("data-default");
+        button.disabled = true;
+        button.textContent = "设置中...";
+        try {
+          const response = await fetch("/providers/" + encodeURIComponent(id) + "/default", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}"
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error?.message || "设置失败");
+          location.reload();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "设为默认";
+          alert("设置默认失败: " + error.message);
+        }
+      });
     });
 
     document.getElementById("modal-import-providers").addEventListener("click", async () => {
@@ -498,7 +550,7 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             text: document.getElementById("modal-import-text").value,
-            model: document.getElementById("modal-import-model").value || "gpt-5.5"
+            model: document.getElementById("modal-import-model").value
           })
         });
         const data = await response.json();
@@ -618,6 +670,18 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
     document.getElementById("hide-unavailable").addEventListener("change", applyUnavailableFilter);
     refreshHealth();
     setInterval(refreshHealth, 5000);
+
+    function resetAddForm() {
+      document.getElementById("add-id").value = "";
+      document.getElementById("add-name").value = "";
+      document.getElementById("add-base-url").value = "";
+      document.getElementById("add-api-key").value = "";
+      document.getElementById("add-model").value = "";
+      document.getElementById("add-path").value = "/v1/chat/completions";
+      document.getElementById("add-result").textContent = "";
+      document.querySelector("#add-modal .modal-head h2").textContent = "添加 Provider";
+      document.getElementById("save-add").textContent = "保存";
+    }
   </script>
 </body>
 </html>`;
@@ -676,6 +740,44 @@ app.post("/providers/test-all", async () => {
   return healthSnapshot();
 });
 
+app.get("/providers/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const provider = config.providers.find((item) => item.id === id);
+
+  if (!provider) {
+    reply.code(404);
+    return {
+      type: "error",
+      error: {
+        type: "not_found_error",
+        message: `Provider ${id} not found`
+      }
+    };
+  }
+
+  return { provider };
+});
+
+app.post("/providers/:id/default", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const provider = config.providers.find((item) => item.id === id);
+
+  if (!provider) {
+    reply.code(404);
+    return {
+      type: "error",
+      error: {
+        type: "not_found_error",
+        message: `Provider ${id} not found`
+      }
+    };
+  }
+
+  config.defaultProvider = id;
+  saveConfig(config);
+  return { ok: true, defaultProvider: id };
+});
+
 app.post("/providers/add", async (request, reply) => {
   const body = addProviderSchema.parse(request.body);
   const baseUrl = sanitizeUrl(body.baseUrl);
@@ -712,12 +814,79 @@ app.post("/providers/add", async (request, reply) => {
     baseUrl,
     path: body.path,
     apiKey: body.apiKey.trim(),
-    models: [body.model.trim()],
+    models: await resolveProviderModels(baseUrl, body.path, body.apiKey.trim(), body.model),
     enabled: true,
     priority
   };
 
   config.providers.push(provider);
+  providerHealth.set(provider.id, { id: provider.id });
+  saveConfig(config);
+  void runProviderHealthCheck(provider.id, "manual");
+
+  return {
+    provider: {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      path: provider.path,
+      models: provider.models
+    }
+  };
+});
+
+app.put("/providers/:id", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const body = addProviderSchema.parse(request.body);
+  const index = config.providers.findIndex((item) => item.id === id);
+
+  if (index < 0) {
+    reply.code(404);
+    return {
+      type: "error",
+      error: {
+        type: "not_found_error",
+        message: `Provider ${id} not found`
+      }
+    };
+  }
+
+  const baseUrl = sanitizeUrl(body.baseUrl);
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+
+  if (config.providers.some((provider) => provider.id !== id && normalizeBaseUrl(provider.baseUrl) === normalizedBaseUrl)) {
+    reply.code(409);
+    return {
+      type: "error",
+      error: {
+        type: "conflict_error",
+        message: "这个 Base URL 已存在"
+      }
+    };
+  }
+
+  if (config.providers.some((provider) => provider.id !== id && provider.apiKey === body.apiKey)) {
+    reply.code(409);
+    return {
+      type: "error",
+      error: {
+        type: "conflict_error",
+        message: "这个 API Key 已存在"
+      }
+    };
+  }
+
+  const current = config.providers[index];
+  const provider: ProviderConfig = {
+    ...current,
+    name: body.name?.trim() || new URL(baseUrl).hostname,
+    baseUrl,
+    path: body.path,
+    apiKey: body.apiKey.trim(),
+    models: await resolveProviderModels(baseUrl, body.path, body.apiKey.trim(), body.model)
+  };
+
+  config.providers[index] = provider;
   providerHealth.set(provider.id, { id: provider.id });
   saveConfig(config);
   void runProviderHealthCheck(provider.id, "manual");
@@ -772,7 +941,7 @@ app.post("/providers/import-text", async (request, reply) => {
       baseUrl: candidate.baseUrl,
       path: candidate.path,
       apiKey: candidate.apiKey,
-      models: [candidate.model],
+      models: await resolveProviderModels(candidate.baseUrl, candidate.path, candidate.apiKey, candidate.model),
       enabled: true,
       priority
     };
@@ -1043,6 +1212,56 @@ function formatTime(timestamp: number): string {
 
 function shortError(error: string): string {
   return error.length > 180 ? `${error.slice(0, 180)}...` : error;
+}
+
+async function resolveProviderModels(baseUrl: string, path: string, apiKey: string, modelInput?: string): Promise<string[]> {
+  const explicitModels = (modelInput ?? "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+  if (explicitModels.length > 0) {
+    return [...new Set(explicitModels)];
+  }
+
+  const probeProvider: ProviderConfig = {
+    id: "model-probe",
+    name: "Model Probe",
+    type: "openai",
+    baseUrl,
+    path,
+    apiKey,
+    models: ["gpt-5.5"],
+    enabled: true,
+    priority: 0
+  };
+
+  try {
+    const result = await testProviderModels(probeProvider, 8000);
+    const discovered = extractModelIds(result.response);
+    if (discovered.length > 0) {
+      return discovered;
+    }
+  } catch {
+    // If model discovery fails, keep add/edit usable and let health checks expose provider errors.
+  }
+
+  return ["gpt-5.5"];
+}
+
+function extractModelIds(response: unknown): string[] {
+  if (!response || typeof response !== "object") return [];
+  const data = "data" in response ? (response as { data?: unknown }).data : undefined;
+  if (!Array.isArray(data)) return [];
+
+  return [...new Set(data
+    .map((item) => {
+      if (item && typeof item === "object" && "id" in item) {
+        return String((item as { id: unknown }).id);
+      }
+      return "";
+    })
+    .filter(Boolean))];
 }
 
 function parseProvidersFromText(text: string, model: string, path: string): Array<{ baseUrl: string; apiKey: string; model: string; path: string }> {
