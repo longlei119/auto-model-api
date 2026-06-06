@@ -342,6 +342,7 @@ app.get("/", async (_request, reply) => {
       <a class="link-button" href="/providers">配置</a>
       <a class="link-button" href="/v1/models">模型</a>
       <button class="primary" id="open-add">+ 添加</button>
+      <button id="open-import">批量导入</button>
     </div>
   </header>
   <main>
@@ -374,23 +375,9 @@ app.get("/", async (_request, reply) => {
   <div class="modal-backdrop" id="add-modal">
     <div class="modal">
       <div class="modal-head">
-        <h2>文本识别添加</h2>
+        <h2>添加 Provider</h2>
         <button id="close-add">关闭</button>
       </div>
-      <div class="import-box">
-        <textarea id="modal-import-text" placeholder="直接粘贴包含 base URL 和 sk- key 的文本，例如：
-
-https://api.example.com
-sk-xxxxxxxxxxxxxxxxxxxxxxxx
-
-解析只在本机进行，识别后会写入 config.local.json。"></textarea>
-        <div class="import-actions">
-          <input id="modal-import-model" class="text-input" value="gpt-5.5" />
-          <button id="modal-import-providers" class="primary">识别并添加</button>
-          <span id="modal-import-result" class="status"></span>
-        </div>
-      </div>
-      <h2 style="font-size:14px;margin:18px 0 12px;color:#8b99b2;">手动添加</h2>
       <div class="form-grid">
         <div class="field">
           <label>名称</label>
@@ -419,17 +406,52 @@ sk-xxxxxxxxxxxxxxxxxxxxxxxx
       </div>
     </div>
   </div>
+  <div class="modal-backdrop" id="import-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>批量导入</h2>
+        <button id="close-import">关闭</button>
+      </div>
+      <div class="import-box">
+        <textarea id="modal-import-text" placeholder="直接粘贴包含 base URL 和 sk- key 的文本，例如：
+
+https://api.example.com
+sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+https://other.example.com
+sk-yyyyyyyyyyyyyyyyyyyyyyyy
+
+解析只在本机进行，识别后会写入 config.local.json。"></textarea>
+        <div class="import-actions">
+          <input id="modal-import-model" class="text-input" value="gpt-5.5" />
+          <button id="modal-import-providers" class="primary">识别并添加</button>
+          <span id="modal-import-result" class="status"></span>
+        </div>
+      </div>
+    </div>
+  </div>
   <script>
     const addModal = document.getElementById("add-modal");
+    const importModal = document.getElementById("import-modal");
     document.getElementById("open-add").addEventListener("click", () => {
       addModal.classList.add("open");
+      document.getElementById("add-base-url").focus();
+    });
+    document.getElementById("open-import").addEventListener("click", () => {
+      importModal.classList.add("open");
       document.getElementById("modal-import-text").focus();
     });
     document.getElementById("close-add").addEventListener("click", () => {
       addModal.classList.remove("open");
     });
+    document.getElementById("close-import").addEventListener("click", () => {
+      importModal.classList.remove("open");
+    });
     addModal.addEventListener("click", (event) => {
       if (event.target === addModal) addModal.classList.remove("open");
+    });
+    importModal.addEventListener("click", (event) => {
+      if (event.target === importModal) importModal.classList.remove("open");
     });
 
     document.getElementById("save-add").addEventListener("click", async () => {

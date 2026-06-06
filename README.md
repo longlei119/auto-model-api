@@ -46,8 +46,8 @@ http://127.0.0.1:8088/
 - Provider 卡片按可用性和延迟自动排序
 - 支持隐藏不可用 Provider
 - 支持查看当前模型会路由到哪个 Provider
-- 支持右上角 `+ 添加` 手动新增 Provider
-- 支持批量粘贴文本，自动识别 URL 和 `sk-...` key
+- 支持右上角 `+ 添加` 手动新增单个 Provider
+- 支持独立的 `批量导入` 功能，粘贴文本后自动识别 URL 和 `sk-...` key
 - Provider 信息持久化保存到本地 `config.local.json`
 - `config.local.json` 被 `.gitignore` 忽略，避免 API key 上传到 GitHub
 - 支持基础上下文裁剪策略
@@ -66,7 +66,7 @@ http://127.0.0.1:8088/
 - 一键测试按钮
 - 隐藏不可用开关
 - 手动添加 Provider 弹窗
-- 批量导入文本区域
+- 批量导入文本识别弹窗
 - 通用配置展示
 
 ## API 接口
