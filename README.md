@@ -17,6 +17,33 @@ Default server: `http://127.0.0.1:8088`
 - `GET /v1/models`
 - `GET /health`
 - `GET /providers`
+- `GET /health-checks`
+- `GET /route-preview/:model`
+- `POST /providers/add`
+- `POST /providers/import-text`
+- `POST /providers/test-all`
+- `POST /providers/:id/test`
+
+## Features
+
+- Claude-compatible local proxy at `http://127.0.0.1:8088`
+- OpenAI-compatible provider adaptation through `/v1/chat/completions`
+- Anthropic-compatible provider passthrough through `/v1/messages`
+- Streaming response conversion from OpenAI-compatible SSE to Claude-compatible SSE
+- Dynamic routing modes: `manual`, `session`, `fastest`, and `fallback`
+- Fastest-provider routing based on real lightweight chat probes, not only `/v1/models`
+- Automatic provider health checks on startup and at a configurable interval
+- One-click manual test for all providers
+- Per-provider manual test from each provider card
+- Provider cards sorted by availability and measured chat latency
+- Toggle to hide unavailable providers
+- Route preview endpoint to inspect the provider selected for a model
+- Local provider management UI with add-provider modal
+- Batch text import that extracts URL and `sk-...` key pairs locally
+- Persistent local provider storage in `config.local.json`
+- Sensitive local config is ignored by git through `.gitignore`
+- Basic context trimming policy for long requests
+- Fallback handling for failed upstream providers before streaming starts
 
 ## Config
 

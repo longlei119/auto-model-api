@@ -28,6 +28,14 @@ const importProvidersSchema = z.object({
   path: z.string().min(1).default("/v1/chat/completions")
 });
 
+const addProviderSchema = z.object({
+  name: z.string().optional(),
+  baseUrl: z.string().url(),
+  apiKey: z.string().min(8),
+  model: z.string().min(1).default("gpt-5.5"),
+  path: z.string().min(1).default("/v1/chat/completions")
+});
+
 const config = loadConfig();
 const metrics = new MetricsStore();
 const router = new ProviderRouter(config, metrics);
@@ -292,6 +300,30 @@ app.get("/", async (_request, reply) => {
     textarea { min-height: 130px; resize: vertical; }
     .import-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .import-actions .text-input { max-width: 170px; height: 34px; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(4, 7, 12, .72);
+      z-index: 50;
+      padding: 20px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: min(560px, 100%);
+      background: #171d2b;
+      border: 1px solid #303a50;
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 24px 80px rgba(0,0,0,.4);
+    }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .modal-head h2 { margin: 0; font-size: 18px; }
+    .form-grid { display: grid; gap: 12px; }
+    .field label { display: block; color: #8b99b2; font-size: 12px; font-weight: 800; margin-bottom: 7px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
     @media (max-width: 720px) {
       header { padding: 0 16px; }
       main { padding: 22px 14px 40px; }
@@ -309,7 +341,7 @@ app.get("/", async (_request, reply) => {
       <button id="test-all">一键测试</button>
       <a class="link-button" href="/providers">配置</a>
       <a class="link-button" href="/v1/models">模型</a>
-      <button class="primary">+ 添加</button>
+      <button class="primary" id="open-add">+ 添加</button>
     </div>
   </header>
   <main>
@@ -351,7 +383,84 @@ app.get("/", async (_request, reply) => {
       </div>
     </section>
   </main>
+  <div class="modal-backdrop" id="add-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>添加 Provider</h2>
+        <button id="close-add">关闭</button>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label>名称</label>
+          <input id="add-name" class="text-input" placeholder="例如 my-provider" />
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input id="add-base-url" class="text-input" placeholder="https://api.example.com" />
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input id="add-api-key" class="text-input" placeholder="sk-..." />
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input id="add-model" class="text-input" value="gpt-5.5" />
+        </div>
+        <div class="field">
+          <label>Path</label>
+          <input id="add-path" class="text-input" value="/v1/chat/completions" />
+        </div>
+      </div>
+      <div class="modal-actions">
+        <span id="add-result" class="status"></span>
+        <button id="save-add" class="primary">保存</button>
+      </div>
+    </div>
+  </div>
   <script>
+    const addModal = document.getElementById("add-modal");
+    document.getElementById("open-add").addEventListener("click", () => {
+      addModal.classList.add("open");
+      document.getElementById("add-base-url").focus();
+    });
+    document.getElementById("close-add").addEventListener("click", () => {
+      addModal.classList.remove("open");
+    });
+    addModal.addEventListener("click", (event) => {
+      if (event.target === addModal) addModal.classList.remove("open");
+    });
+
+    document.getElementById("save-add").addEventListener("click", async () => {
+      const button = document.getElementById("save-add");
+      const result = document.getElementById("add-result");
+      button.disabled = true;
+      button.textContent = "保存中...";
+      result.textContent = "";
+
+      try {
+        const response = await fetch("/providers/add", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: document.getElementById("add-name").value,
+            baseUrl: document.getElementById("add-base-url").value,
+            apiKey: document.getElementById("add-api-key").value,
+            model: document.getElementById("add-model").value || "gpt-5.5",
+            path: document.getElementById("add-path").value || "/v1/chat/completions"
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error?.message || "保存失败");
+        result.textContent = "已添加 " + data.provider.id + "，正在刷新...";
+        setTimeout(() => location.reload(), 700);
+      } catch (error) {
+        result.textContent = "保存失败: " + error.message;
+      } finally {
+        button.disabled = false;
+        button.textContent = "保存";
+      }
+    });
+
     document.querySelectorAll("[data-test]").forEach((button) => {
       button.addEventListener("click", async () => {
         const id = button.getAttribute("data-test");
@@ -541,6 +650,63 @@ app.post("/providers/:id/test", async (request, reply) => {
 app.post("/providers/test-all", async () => {
   await runHealthChecks("manual");
   return healthSnapshot();
+});
+
+app.post("/providers/add", async (request, reply) => {
+  const body = addProviderSchema.parse(request.body);
+  const baseUrl = sanitizeUrl(body.baseUrl);
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+
+  if (config.providers.some((provider) => normalizeBaseUrl(provider.baseUrl) === normalizedBaseUrl)) {
+    reply.code(409);
+    return {
+      type: "error",
+      error: {
+        type: "conflict_error",
+        message: "这个 Base URL 已存在"
+      }
+    };
+  }
+
+  if (config.providers.some((provider) => provider.apiKey === body.apiKey)) {
+    reply.code(409);
+    return {
+      type: "error",
+      error: {
+        type: "conflict_error",
+        message: "这个 API Key 已存在"
+      }
+    };
+  }
+
+  const hostname = new URL(baseUrl).hostname;
+  const priority = Math.max(0, ...config.providers.map((provider) => provider.priority)) + 10;
+  const provider: ProviderConfig = {
+    id: uniqueProviderId(hostToId(hostname)),
+    name: body.name?.trim() || hostname,
+    type: "openai",
+    baseUrl,
+    path: body.path,
+    apiKey: body.apiKey.trim(),
+    models: [body.model.trim()],
+    enabled: true,
+    priority
+  };
+
+  config.providers.push(provider);
+  providerHealth.set(provider.id, { id: provider.id });
+  saveConfig(config);
+  void runProviderHealthCheck(provider.id, "manual");
+
+  return {
+    provider: {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      path: provider.path,
+      models: provider.models
+    }
+  };
 });
 
 app.post("/providers/import-text", async (request, reply) => {
