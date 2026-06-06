@@ -202,10 +202,6 @@ function toOpenAI(req: InternalRequest, model: string, stream: boolean): unknown
     payload.tool_choice = claudeToolChoiceToOpenAI(req.raw.tool_choice);
   }
 
-  if (stream && payload.tools) {
-    payload.stream_options = { include_usage: true };
-  }
-
   return payload;
 }
 
@@ -526,7 +522,7 @@ async function pipeOpenAIStreamAsClaude(response: Response, reply: FastifyReply,
             writeSse(reply, "content_block_start", {
               type: "content_block_start",
               index: blockIndex + tcIndex,
-              content_block: { type: "tool_use", id: state.id, name: state.name }
+              content_block: { type: "tool_use", id: state.id, name: state.name, input: {} }
             });
             state.started = true;
           }
@@ -550,6 +546,7 @@ async function pipeOpenAIStreamAsClaude(response: Response, reply: FastifyReply,
         for (const [tcIndex, state] of toolCallState) {
           if (state.started) {
             writeSse(reply, "content_block_stop", { type: "content_block_stop", index: blockIndex + tcIndex });
+            state.started = false;
           }
         }
       }
