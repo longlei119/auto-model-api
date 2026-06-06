@@ -351,18 +351,6 @@ app.get("/", async (_request, reply) => {
     </section>
 
     <section>
-      <h1 class="section-title">批量导入</h1>
-      <div class="import-box">
-        <textarea id="import-text" placeholder="粘贴包含 base URL 和 sk- 开头 key 的文本。解析只在本机进行。"></textarea>
-        <div class="import-actions">
-          <input id="import-model" class="text-input" value="gpt-5.5" />
-          <button id="import-providers">识别并添加</button>
-          <span id="import-result" class="status"></span>
-        </div>
-      </div>
-    </section>
-
-    <section>
       <h1 class="section-title">通用配置</h1>
       <div class="settings">
         <div class="setting"><span>端口</span><strong>${config.server.port}</strong></div>
@@ -386,9 +374,23 @@ app.get("/", async (_request, reply) => {
   <div class="modal-backdrop" id="add-modal">
     <div class="modal">
       <div class="modal-head">
-        <h2>添加 Provider</h2>
+        <h2>文本识别添加</h2>
         <button id="close-add">关闭</button>
       </div>
+      <div class="import-box">
+        <textarea id="modal-import-text" placeholder="直接粘贴包含 base URL 和 sk- key 的文本，例如：
+
+https://api.example.com
+sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+解析只在本机进行，识别后会写入 config.local.json。"></textarea>
+        <div class="import-actions">
+          <input id="modal-import-model" class="text-input" value="gpt-5.5" />
+          <button id="modal-import-providers" class="primary">识别并添加</button>
+          <span id="modal-import-result" class="status"></span>
+        </div>
+      </div>
+      <h2 style="font-size:14px;margin:18px 0 12px;color:#8b99b2;">手动添加</h2>
       <div class="form-grid">
         <div class="field">
           <label>名称</label>
@@ -421,7 +423,7 @@ app.get("/", async (_request, reply) => {
     const addModal = document.getElementById("add-modal");
     document.getElementById("open-add").addEventListener("click", () => {
       addModal.classList.add("open");
-      document.getElementById("add-base-url").focus();
+      document.getElementById("modal-import-text").focus();
     });
     document.getElementById("close-add").addEventListener("click", () => {
       addModal.classList.remove("open");
@@ -458,6 +460,34 @@ app.get("/", async (_request, reply) => {
       } finally {
         button.disabled = false;
         button.textContent = "保存";
+      }
+    });
+
+    document.getElementById("modal-import-providers").addEventListener("click", async () => {
+      const button = document.getElementById("modal-import-providers");
+      const result = document.getElementById("modal-import-result");
+      button.disabled = true;
+      button.textContent = "识别中...";
+      result.textContent = "";
+
+      try {
+        const response = await fetch("/providers/import-text", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            text: document.getElementById("modal-import-text").value,
+            model: document.getElementById("modal-import-model").value || "gpt-5.5"
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error?.message || "导入失败");
+        result.textContent = "新增 " + data.added.length + " 个，跳过 " + data.skipped.length + " 个；正在刷新...";
+        setTimeout(() => location.reload(), 900);
+      } catch (error) {
+        result.textContent = "导入失败: " + error.message;
+      } finally {
+        button.disabled = false;
+        button.textContent = "识别并添加";
       }
     });
 
@@ -500,34 +530,6 @@ app.get("/", async (_request, reply) => {
       } finally {
         button.disabled = false;
         button.textContent = "一键测试";
-      }
-    });
-
-    document.getElementById("import-providers").addEventListener("click", async () => {
-      const button = document.getElementById("import-providers");
-      const result = document.getElementById("import-result");
-      button.disabled = true;
-      button.textContent = "识别中...";
-      result.textContent = "";
-
-      try {
-        const response = await fetch("/providers/import-text", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            text: document.getElementById("import-text").value,
-            model: document.getElementById("import-model").value || "gpt-5.5"
-          })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error?.message || "导入失败");
-        result.textContent = "新增 " + data.added.length + " 个，跳过 " + data.skipped.length + " 个；正在刷新...";
-        setTimeout(() => location.reload(), 900);
-      } catch (error) {
-        result.textContent = "导入失败: " + error.message;
-      } finally {
-        button.disabled = false;
-        button.textContent = "识别并添加";
       }
     });
 
