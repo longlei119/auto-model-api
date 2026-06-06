@@ -26,7 +26,7 @@ const configSchema = z.object({
     healthCheckIntervalMs: z.number().int().positive().default(30000),
     requestTimeoutMs: z.number().int().positive().default(120000)
   }),
-  defaultProvider: z.string(),
+  defaultProvider: z.string().default(""),
   context: z.object({
     mode: z.enum(["preserve", "truncate"]).default("preserve"),
     maxInputChars: z.number().int().positive().default(180000),

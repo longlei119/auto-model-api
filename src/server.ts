@@ -82,7 +82,7 @@ app.get("/", async (_request, reply) => {
       </dl>
       <div class="card-actions">
         <button data-test="${escapeHtml(provider.id)}">测试</button>
-        <button data-default="${escapeHtml(provider.id)}"${provider.id === config.defaultProvider ? " class=\"active\"" : ""}>设为默认</button>
+        <button data-default="${escapeHtml(provider.id)}"${provider.id === config.defaultProvider ? " class=\"active\"" : ""}>${provider.id === config.defaultProvider ? "取消默认" : "设为默认"}</button>
         <button data-edit="${escapeHtml(provider.id)}">编辑</button>
         <button class="danger">删除</button>
       </div>
@@ -355,7 +355,7 @@ app.get("/", async (_request, reply) => {
       <h1 class="section-title">通用配置</h1>
       <div class="settings">
         <div class="setting"><span>端口</span><strong>${config.server.port}</strong></div>
-        <div class="setting"><span>默认 Provider</span><strong>${escapeHtml(config.defaultProvider)}</strong></div>
+        <div class="setting"><span>默认 Provider</span><strong>${escapeHtml(config.defaultProvider || "未设置")}</strong></div>
         <div class="setting"><span>路由模式</span><strong>${escapeHtml(config.routing.mode)}</strong></div>
         <div class="setting"><span>最大输入字符</span><strong>${config.context.maxInputChars}</strong></div>
         <div class="setting"><span>Fallback</span><strong>${config.routing.fallback ? "true" : "false"}</strong></div>
@@ -519,7 +519,8 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
       button.addEventListener("click", async () => {
         const id = button.getAttribute("data-default");
         button.disabled = true;
-        button.textContent = "设置中...";
+        const wasDefault = button.classList.contains("active");
+        button.textContent = wasDefault ? "取消中..." : "设置中...";
         try {
           const response = await fetch("/providers/" + encodeURIComponent(id) + "/default", {
             method: "POST",
@@ -531,7 +532,7 @@ sk-yyyyyyyyyyyyyyyyyyyyyyyy
           location.reload();
         } catch (error) {
           button.disabled = false;
-          button.textContent = "设为默认";
+          button.textContent = wasDefault ? "取消默认" : "设为默认";
           alert("设置默认失败: " + error.message);
         }
       });
@@ -773,9 +774,9 @@ app.post("/providers/:id/default", async (request, reply) => {
     };
   }
 
-  config.defaultProvider = id;
+  config.defaultProvider = config.defaultProvider === id ? "" : id;
   saveConfig(config);
-  return { ok: true, defaultProvider: id };
+  return { ok: true, defaultProvider: config.defaultProvider };
 });
 
 app.post("/providers/add", async (request, reply) => {
@@ -955,9 +956,6 @@ app.post("/providers/import-text", async (request, reply) => {
   }
 
   if (added.length > 0) {
-    if (!config.defaultProvider || !config.providers.some((provider) => provider.id === config.defaultProvider)) {
-      config.defaultProvider = added[0].id;
-    }
     saveConfig(config);
     void runHealthChecks("manual");
   }
